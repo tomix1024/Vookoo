@@ -24,6 +24,7 @@
 #include <iostream>
 #include <unordered_map>
 #include <vector>
+#include <optional>
 #include <thread>
 #include <chrono>
 #include <functional>
@@ -465,34 +466,41 @@ public:
 
   DeviceMaker &physicalDeviceFeatures(const vk::PhysicalDeviceFeatures &v = {})
   {
-	pdfs_.push_back(v);
+	pdfs_ = v;
 	return *this;
+  }
+
+  template <typename T>
+  DeviceMaker &additionalDeviceFeatures(const T &v = {})
+  {
+    static_assert(vk::StructExtends<T, vk::PhysicalDeviceFeatures2>::value, "the given type does not extend physical device features");
+    *getNextChainEntry<T>() = v;
+    return *this;
   }
   
   DeviceMaker &enableGeometryShader ()
   {
 	// assert !pdfs_.empty()
-	pdfs_.back().setGeometryShader(true);
+	pdfs_.value().setGeometryShader(true);
 	return *this;
   }
   
   DeviceMaker &enableTessellationShader ()
   {
 	// assert !pdfs_.empty()
-	pdfs_.back().setTessellationShader(true);
+	pdfs_.value().setTessellationShader(true);
 	return *this;
   }
   
   DeviceMaker &multiviewFeatures (const vk::PhysicalDeviceMultiviewFeatures &v = {})
   {
-	mvfs_.push_back(v);
+    *getNextChainEntry<vk::PhysicalDeviceMultiviewFeatures>() = v;
 	return *this;
   }
   
-  DeviceMaker &enableMultiview ()
+  DeviceMaker &enableMultiview()
   {
-	// assert !mvfs_.empty()
-	mvfs_.back().setMultiview(true);
+    getNextChainEntry<vk::PhysicalDeviceMultiviewFeatures>()->setMultiview(true);
 	return *this;
   }
 
@@ -506,22 +514,48 @@ public:
     };
 
     //
-    if (!pdfs_.empty())
-		dci.setPEnabledFeatures(&pdfs_.front());
+    if (pdfs_)
+		dci.setPEnabledFeatures(&pdfs_.value());
 
-    // required to enable and use multiview
-    if (!mvfs_.empty())
-		dci.pNext = &mvfs_.front();
+    // construct next chain
+    const void **ppNext = &dci.pNext;
+    for (auto &next : nextchain_)
+    {
+      //assert(next.size() >= sizeof(vk::BaseInStructure))
+      auto next_base = reinterpret_cast<vk::BaseInStructure*>(next.data());
+      *ppNext = next_base;
+      ppNext = reinterpret_cast<const void **>(&next_base->pNext);
+    }
+    // Set last next ptr to null
+    *ppNext = nullptr;
 
     return physical_device.createDeviceUnique(dci);
   }
+private:
+  template <typename T>
+  T *getNextChainEntry()
+  {
+    // This method can probably be useful in other *Maker classes?
+    static_assert(vk::StructExtends<T, vk::DeviceCreateInfo>::value, "the given type cannot be included in the next chain");
+    for (auto &next : nextchain_)
+    {
+      //assert(next.size() >= sizeof(vk::BaseInStructure))
+      auto next_base = reinterpret_cast<vk::BaseInStructure*>(next.data());
+      if (next_base->sType == T::structureType)
+        return reinterpret_cast<T*>(next.data());
+    }
+    auto v = T(); // construct element with correct default values (e.g. sType)
+    nextchain_.emplace_back(reinterpret_cast<char*>(&v), reinterpret_cast<char*>(&v+1));
+    return reinterpret_cast<T*>(nextchain_.back().data());
+  }
+
 private:
   std::vector<const char *> layers_;
   std::vector<const char *> device_extensions_;
   std::vector<std::vector<float> > queue_priorities_;
   std::vector<vk::DeviceQueueCreateInfo> qci_;
-  std::vector<vk::PhysicalDeviceFeatures> pdfs_;
-  std::vector<vk::PhysicalDeviceMultiviewFeatures> mvfs_;
+  std::optional<vk::PhysicalDeviceFeatures> pdfs_;
+  std::vector<std::vector<char>> nextchain_;
 
   vk::ApplicationInfo app_info_;
 };
