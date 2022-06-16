@@ -3,8 +3,14 @@ cmake_policy(VERSION 3.1.3)
 
 project(Vookoo VERSION 2.0.0)
 
-add_subdirectory(external/glfw)
-add_subdirectory(examples)
+
+option(VOOKOO_BUILD_EXAMPLES "Build the Vookoo example programs" ON)
+
+
+if (VOOKOO_BUILD_EXAMPLES)
+    add_subdirectory(external/glfw)
+    add_subdirectory(examples)
+endif ()
 
 add_library(vookoo_interface INTERFACE )
 target_sources(vookoo_interface INTERFACE )
